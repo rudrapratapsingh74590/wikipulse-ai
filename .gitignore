@@ -1,7 +1,16 @@
-venv/
-.venv/
+# Python cache
 __pycache__/
 *.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment variables and secrets
 .env
 .streamlit/secrets.toml
+
+# Editor and system files
 .vscode/
+.DS_Store
+Thumbs.db
