@@ -464,6 +464,7 @@ page = st.sidebar.radio(
         "Knowledge Explorer",
         "Article Detail Explorer",
     ],
+    index=5,
 )
 
 st.sidebar.divider()
