@@ -1,4 +1,4 @@
-﻿import math
+import math
 import re
 from pathlib import Path
 
@@ -11,6 +11,12 @@ from modules.data_loader import (
     load_language_data,
     get_data_status,
     get_language_comparison,
+    get_overview_metrics,
+    get_quality_distribution_sql,
+    get_reference_distribution_sql,
+    get_article_results,
+    get_quality_summary_sql,
+    query_language,
 )
 
 from modules.analytics import (
@@ -511,618 +517,165 @@ st.divider()
 
 
 # ============================================================
-# DATA LOADING
+# DATA LOADING — DuckDB keeps full Parquet files out of Pandas
 # ============================================================
-
 data_status = get_data_status()
-
-# Search, detail and language comparison pages use DuckDB
-# or the dedicated comparison query instead of loading full data.
-
-if page in [
-    "Article Search",
-    "Article Detail Explorer",
-    "Language Comparison",
-]:
-    df = pd.DataFrame()
-
-else:
-    with st.spinner("Loading Wikimedia dataset..."):
-        df = load_language_data(language)
-
-if df is None:
-    df = pd.DataFrame()
-
+df = pd.DataFrame()  # Dashboard pages query Parquet and materialize bounded results.
 
 # ============================================================
 # DATA AVAILABILITY
 # ============================================================
-
-if (
-    df.empty
-    and page not in [
-        "Knowledge Explorer",
-        "Article Search",
-        "Article Detail Explorer",
-        "Language Comparison",
-    ]
-):
-    st.warning(
-        "No processed Wikimedia dataset is available."
-    )
-
-    st.subheader("Dataset Connection Status")
-
-    for lang, info in data_status.items():
-        if info.get("available"):
-            st.success(f"{lang}: Dataset detected")
-        else:
-            st.info(
-                f"{lang}: Waiting for processed Parquet file"
-            )
-
-    st.code(
-        "data/\n"
-        "├── enwiki/\n"
-        "│   └── enwiki_full_analysis.parquet\n"
-        "└── frwiki/\n"
-        "    └── frwiki_full_analysis.parquet"
-    )
-
+if page != "Language Comparison" and not data_status.get(language, {}).get("available"):
+    st.warning(f"No processed {language} Parquet dataset is available.")
     st.stop()
 
 
 # ============================================================
 # PART 1: OVERVIEW
 # ============================================================
-
 if page == "Overview":
-
-    section_title(
-        "Platform Overview",
-        "Monitor article completeness, reference coverage and dataset health.",
-    )
-
-    metrics = get_dashboard_metrics(df)
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "📚 Total Articles",
-        f"{metrics.get('total_articles', 0):,}",
-    )
-
-    c2.metric(
-        "⭐ Average Completeness",
-        f"{metrics.get('average_score', 0):.2f}/100",
-    )
-
-    c3.metric(
-        "📖 No Recorded References",
-        f"{metrics.get('no_references', 0):,}",
-    )
-
-    c4.metric(
-        "🌐 Languages",
-        metrics.get("languages", 1),
-    )
-
+    section_title("Platform Overview","Monitor article completeness, reference coverage and dataset health.")
+    metrics=get_overview_metrics(language)
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("📚 Total Articles",f"{int(metrics.get('total_articles') or 0):,}")
+    c2.metric("⭐ Average Completeness",f"{float(metrics.get('average_score') or 0):.2f}/100")
+    c3.metric("📖 No Recorded References",f"{int(metrics.get('no_references') or 0):,}")
+    c4.metric("🌐 Languages",int(metrics.get("languages") or 1))
     st.divider()
-
-    left, right = st.columns(2, gap="large")
-
+    left,right=st.columns(2,gap="large")
     with left:
         section_title("Article Quality Distribution")
-
-        distribution = get_quality_distribution(df)
-
+        distribution=get_quality_distribution_sql(language)
         if not distribution.empty:
-            fig = quality_chart(distribution)
-
-            fig.update_layout(
-                height=380,
-                paper_bgcolor=PANEL,
-                plot_bgcolor=PANEL,
-                font=dict(color="#e2e8f0"),
-                title=None,
-                margin=dict(
-                    l=20,
-                    r=20,
-                    t=25,
-                    b=70,
-                ),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=-0.24,
-                    xanchor="center",
-                    x=0.5,
-                ),
-            )
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                config={
-                    "displayModeBar": False,
-                    "responsive": True,
-                },
-            )
-        else:
-            st.info("Quality distribution is unavailable.")
-
+            fig=quality_chart(distribution)
+            fig.update_layout(height=380,paper_bgcolor=PANEL,plot_bgcolor=PANEL,font=dict(color="#e2e8f0"),title=None)
+            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False,"responsive":True})
+        else: st.info("Quality distribution is unavailable.")
     with right:
         section_title("Reference Intelligence")
-
-        reference_data = get_reference_distribution(df)
-
+        reference_data=get_reference_distribution_sql(language)
         if not reference_data.empty:
-            fig = reference_chart(reference_data)
-
-            fig.update_layout(
-                height=380,
-                paper_bgcolor=PANEL,
-                plot_bgcolor=PANEL,
-                font=dict(color="#e2e8f0"),
-                title=None,
-                margin=dict(
-                    l=25,
-                    r=85,
-                    t=25,
-                    b=35,
-                ),
-                showlegend=False,
-            )
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                config={
-                    "displayModeBar": False,
-                    "responsive": True,
-                },
-            )
-        else:
-            st.info("Reference distribution is unavailable.")
-
+            fig=reference_chart(reference_data)
+            fig.update_layout(height=380,paper_bgcolor=PANEL,plot_bgcolor=PANEL,font=dict(color="#e2e8f0"),title=None,showlegend=False)
+            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False,"responsive":True})
+        else: st.info("Reference distribution is unavailable.")
     st.divider()
-
-    section_title(
-        "⚠️ Article Quality Explorer",
-        "Explore the 1,000 lowest-scoring articles in the selected dataset.",
-    )
-
-    if "completeness_score" in df.columns:
-        weak = df.nsmallest(
-            1000,
-            "completeness_score",
-            keep="first",
-        ).copy()
-    else:
-        weak = find_weak_articles(
-            df,
-            limit=1000,
-        ).copy()
-
+    section_title("⚠️ Article Quality Explorer","Explore the 1,000 lowest-scoring articles in the selected dataset.")
+    weak=get_article_results(language,mode="weak",limit=1000)
     if not weak.empty:
-        weak["quality_category"] = (
-            weak["completeness_score"].apply(quality_category)
-        )
-
-        search_col, category_col = st.columns([2, 1])
-
+        weak["quality_category"]=weak["completeness_score"].apply(quality_category)
+        search_col,category_col=st.columns([2,1])
         with search_col:
-            query = st.text_input(
-                "🔎 Search article",
-                placeholder="Enter Wikipedia article title...",
-                key="overview_article_search",
-            )
-
+            query=st.text_input("🔎 Search article",placeholder="Enter Wikipedia article title...",key="overview_article_search")
         with category_col:
-            selected_category = st.selectbox(
-                "Quality category",
-                ["All"] + QUALITY_ORDER,
-                key="overview_quality_filter",
-            )
-
-        filtered = article_search_filter(weak, query)
-
-        if selected_category != "All":
-            filtered = filtered[
-                filtered["quality_category"] == selected_category
-            ]
-
-        st.markdown(
-            f"**{len(filtered):,} articles found in the selected result set**"
-        )
-
-        st.caption(
-            "The explorer searches within the 1,000 lowest-scoring records, "
-            "not the entire dataset."
-        )
-
+            selected_category=st.selectbox("Quality category",["All"]+QUALITY_ORDER,key="overview_quality_filter")
+        filtered=article_search_filter(weak,query)
+        if selected_category!="All": filtered=filtered[filtered["quality_category"]==selected_category]
+        st.markdown(f"**{len(filtered):,} articles found in the selected result set**")
+        st.caption("The explorer searches within the 1,000 lowest-scoring records, not the entire dataset.")
         if not filtered.empty:
-            show_article_table(
-                filtered.head(500),
-                key="overview_quality_table",
-                height=470,
-            )
-
-            show_download(
-                filtered,
-                f"wikipulse_{language.lower()}_quality_explorer.csv",
-                "📥 Download filtered results",
-            )
-        else:
-            st.info("No articles match your search and category filter.")
-    else:
-        st.success("No articles needing improvement were found.")
-
+            show_article_table(filtered.head(500),key="overview_quality_table",height=470)
+            show_download(filtered,f"wikipulse_{language.lower()}_quality_explorer.csv","📥 Download filtered results")
+        else: st.info("No articles match your search and category filter.")
+    else: st.success("No articles needing improvement were found.")
     st.divider()
-
     section_title("Dataset Information")
-
-    info1, info2, info3 = st.columns(3)
-
-    info1.metric("Current Dataset", language)
-    info2.metric("Articles Analyzed", f"{len(df):,}")
-    info3.metric("Dataset Columns", f"{len(df.columns):,}")
+    i1,i2,i3=st.columns(3)
+    i1.metric("Current Dataset",language)
+    i2.metric("Articles Analyzed",f"{int(metrics.get('total_articles') or 0):,}")
+    i3.metric("Dataset Columns","8")
 
 
 # ============================================================
 # PART 2: ARTICLE QUALITY RANKING
 # ============================================================
-
 elif page == "Article Quality Ranking":
-
-    section_title(
-        "🏆 Article Quality Ranking",
-        "Explore the highest and lowest-scoring Wikipedia articles.",
-    )
-
-    summary = get_quality_summary(df) or {}
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Strong", f"{summary.get('strong', 0):,}")
-    c2.metric("Good", f"{summary.get('good', 0):,}")
-    c3.metric(
-        "Needs Improvement",
-        f"{summary.get('needs_improvement', 0):,}",
-    )
-    c4.metric("Poor", f"{summary.get('poor', 0):,}")
-
+    section_title("🏆 Article Quality Ranking","Explore the highest and lowest-scoring Wikipedia articles.")
+    summary=get_quality_summary_sql(language)
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Strong",f"{int(summary.get('strong') or 0):,}")
+    c2.metric("Good",f"{int(summary.get('good') or 0):,}")
+    c3.metric("Needs Improvement",f"{int(summary.get('needs_improvement') or 0):,}")
+    c4.metric("Poor",f"{int(summary.get('poor') or 0):,}")
     st.divider()
+    st.subheader("🥇 Top 10 Articles")
+    st.caption("Highest completeness scores. Ties are ordered alphabetically.")
+    top10=get_article_results(language,mode="top",limit=10)
+    if not top10.empty:
+        top10["quality_category"]=top10["completeness_score"].apply(quality_category)
+        top10.insert(0,"Rank",range(1,len(top10)+1))
+        show_article_table(top10,key="ranking_top_10",height=400)
+        show_download(top10,"wikipulse_top_10_articles.csv","📥 Download Top 10")
+    st.divider()
+    st.subheader("⚠️ Bottom 10 Articles")
+    st.caption("Lowest completeness scores. Ties are ordered alphabetically.")
+    bottom10=get_article_results(language,mode="bottom",limit=10)
+    if not bottom10.empty:
+        bottom10["quality_category"]=bottom10["completeness_score"].apply(quality_category)
+        bottom10.insert(0,"Rank",range(1,len(bottom10)+1))
+        show_article_table(bottom10,key="ranking_bottom_10",height=400)
+        show_download(bottom10,"wikipulse_bottom_10_articles.csv","📥 Download Bottom 10")
+    st.divider()
+    st.subheader("📊 Full Article Rankings")
+    st.caption("Search, filter and select how many of the highest-ranked articles to display.")
+    s,c,l=st.columns([2,1,1])
+    with s: ranking_search=st.text_input("Search article",placeholder="Enter article title...",key="full_ranking_search")
+    with c: ranking_category=st.selectbox("Quality category",["All"]+QUALITY_ORDER,key="full_ranking_category")
+    with l: ranking_limit=st.selectbox("Display articles",[10,25,50,100,500],index=2,key="full_ranking_limit")
+    full_ranking=get_article_results(language,mode="top",limit=ranking_limit)
+    if not full_ranking.empty:
+        full_ranking["quality_category"]=full_ranking["completeness_score"].apply(quality_category)
+        full_ranking=article_search_filter(full_ranking,ranking_search)
+        if ranking_category!="All": full_ranking=full_ranking[full_ranking["quality_category"]==ranking_category]
+        full_ranking.insert(0,"Rank",range(1,len(full_ranking)+1))
+        st.markdown(f"**{len(full_ranking):,} matching articles**")
+        show_article_table(full_ranking,key="full_article_ranking",height=500)
+        show_download(full_ranking,"wikipulse_full_article_rankings.csv","📥 Download Full Ranking Results")
+    else: st.info("No articles match your selected filters.")
+    st.info("Completeness scores are experimental dataset-based indicators. They are not official Wikipedia quality ratings or assessments of factual accuracy.")
 
-    if (
-        "completeness_score" not in df.columns
-        or "article" not in df.columns
-    ):
-        st.error(
-            "The dataset must contain article and completeness_score columns."
-        )
 
-    else:
-        with st.spinner("Preparing article rankings..."):
-            ranked_all = df.sort_values(
-                ["completeness_score", "article"],
-                ascending=[False, True],
-                kind="stable",
-                na_position="last",
-            )
-
-        st.subheader("🥇 Top 10 Articles")
-
-        st.caption(
-            "Highest completeness scores. Ties are ordered alphabetically."
-        )
-
-        top10 = ranked_all.head(10).copy()
-
-        top10["quality_category"] = (
-            top10["completeness_score"].apply(quality_category)
-        )
-
-        top10.insert(
-            0,
-            "Rank",
-            range(1, len(top10) + 1),
-        )
-
-        show_article_table(
-            top10,
-            key="ranking_top_10",
-            height=400,
-        )
-
-        show_download(
-            top10,
-            "wikipulse_top_10_articles.csv",
-            "📥 Download Top 10",
-        )
-
-        st.divider()
-
-        st.subheader("⚠️ Bottom 10 Articles")
-
-        st.caption(
-            "Lowest completeness scores. Ties are ordered alphabetically."
-        )
-
-        bottom10 = ranked_all.tail(10).copy()
-
-        bottom10 = bottom10.sort_values(
-            ["completeness_score", "article"],
-            ascending=[True, True],
-            kind="stable",
-            na_position="first",
-        )
-
-        bottom10["quality_category"] = (
-            bottom10["completeness_score"].apply(quality_category)
-        )
-
-        bottom10.insert(
-            0,
-            "Rank",
-            range(1, len(bottom10) + 1),
-        )
-
-        show_article_table(
-            bottom10,
-            key="ranking_bottom_10",
-            height=400,
-        )
-
-        show_download(
-            bottom10,
-            "wikipulse_bottom_10_articles.csv",
-            "📥 Download Bottom 10",
-        )
-
-        st.divider()
-
-        st.subheader("📊 Full Article Rankings")
-
-        st.caption(
-            "Search, filter and select how many of the highest-ranked "
-            "articles to display."
-        )
-
-        search_col, category_col, limit_col = st.columns([2, 1, 1])
-
-        with search_col:
-            ranking_search = st.text_input(
-                "Search article",
-                placeholder="Enter article title...",
-                key="full_ranking_search",
-            )
-
-        with category_col:
-            ranking_category = st.selectbox(
-                "Quality category",
-                ["All"] + QUALITY_ORDER,
-                key="full_ranking_category",
-            )
-
-        with limit_col:
-            ranking_limit = st.selectbox(
-                "Display articles",
-                [10, 25, 50, 100, 500],
-                index=2,
-                key="full_ranking_limit",
-            )
-
-        full_ranking = ranked_all.head(ranking_limit).copy()
-
-        full_ranking["quality_category"] = (
-            full_ranking["completeness_score"].apply(quality_category)
-        )
-
-        full_ranking = article_search_filter(
-            full_ranking,
-            ranking_search,
-        )
-
-        if ranking_category != "All":
-            full_ranking = full_ranking[
-                full_ranking["quality_category"] == ranking_category
-            ]
-
-        full_ranking.insert(
-            0,
-            "Rank",
-            range(1, len(full_ranking) + 1),
-        )
-
-        st.markdown(
-            f"**{len(full_ranking):,} matching articles**"
-        )
-
-        if not full_ranking.empty:
-            show_article_table(
-                full_ranking,
-                key="full_article_ranking",
-                height=500,
-            )
-
-            show_download(
-                full_ranking,
-                "wikipulse_full_article_rankings.csv",
-                "📥 Download Full Ranking Results",
-            )
-        else:
-            st.info("No articles match your selected filters.")
-
-    st.info(
-        "Completeness scores are experimental dataset-based indicators. "
-        "They are not official Wikipedia quality ratings or assessments "
-        "of factual accuracy."
-    )
-    # ============================================================
+# ============================================================
 # PART 3: ARTICLE COMPLETENESS
 # ============================================================
-
 elif page == "Article Completeness":
-
-    section_title(
-        "📊 Article Completeness Analyzer",
-        "Find records below a selected completeness threshold.",
-    )
-
-    threshold = st.slider(
-        "Show articles below this score",
-        min_value=0,
-        max_value=100,
-        value=60,
-        step=5,
-    )
-
-    weak = df[
-        df["completeness_score"] < threshold
-    ].copy()
-
-    weak = weak.sort_values(
-        "completeness_score",
-        kind="stable",
-    )
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "Articles Below Threshold",
-        f"{len(weak):,}",
-    )
-
-    c2.metric(
-        "Selected Threshold",
-        f"{threshold}/100",
-    )
-
-    c3.metric(
-        "Average Score of Results",
-        f"{weak['completeness_score'].mean():.2f}"
-        if not weak.empty else "—",
-    )
-
+    section_title("📊 Article Completeness Analyzer","Find records below a selected completeness threshold.")
+    threshold=st.slider("Show articles below this score",min_value=0,max_value=100,value=60,step=5)
+    weak=get_article_results(language,mode="below",threshold=threshold,limit=50000)
+    c1,c2,c3=st.columns(3)
+    c1.metric("Articles Below Threshold",f"{len(weak):,}")
+    c2.metric("Selected Threshold",f"{threshold}/100")
+    c3.metric("Average Score of Results",f"{weak['completeness_score'].mean():.2f}" if not weak.empty else "—")
     st.divider()
-
     section_title("Article Results")
-
-    search = st.text_input(
-        "Search within results",
-        placeholder="Enter article title...",
-        key="completeness_search",
-    )
-
-    filtered = article_search_filter(
-        weak,
-        search,
-    )
-
-    st.caption(
-        f"{len(filtered):,} matching records"
-    )
-
+    search=st.text_input("Search within results",placeholder="Enter article title...",key="completeness_search")
+    filtered=article_search_filter(weak,search)
+    st.caption(f"{len(filtered):,} matching records (up to 50,000 retrieved)")
     if not filtered.empty:
-
-        show_article_table(
-            filtered.head(1000),
-            key="completeness_results",
-            height=470,
-        )
-
-        show_download(
-            filtered,
-            "wikipulse_completeness_report.csv",
-            "📥 Download full completeness report",
-        )
+        show_article_table(filtered.head(1000),key="completeness_results",height=470)
+        show_download(filtered,"wikipulse_completeness_report.csv","📥 Download retrieved completeness results")
 
 
 # ============================================================
 # PART 4: REFERENCE INTELLIGENCE
 # ============================================================
-
 elif page == "Reference Intelligence":
-
-    section_title(
-        "📚 Reference Intelligence",
-        "Analyze recorded references and identify long articles "
-        "with low reference density.",
-    )
-
-    distribution = get_reference_distribution(df)
-
+    section_title("📚 Reference Intelligence","Analyze recorded references and identify long articles with low reference density.")
+    distribution=get_reference_distribution_sql(language)
     if not distribution.empty:
-
-        fig = reference_chart(distribution)
-
-        fig.update_layout(
-            height=420,
-            paper_bgcolor=PANEL,
-            plot_bgcolor=PANEL,
-            font=dict(color="#e2e8f0"),
-            title=None,
-            margin=dict(
-                l=30,
-                r=90,
-                t=30,
-                b=40,
-            ),
-            showlegend=False,
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            config={"displayModeBar": False},
-        )
-
+        fig=reference_chart(distribution)
+        fig.update_layout(height=420,paper_bgcolor=PANEL,plot_bgcolor=PANEL,font=dict(color="#e2e8f0"),title=None,showlegend=False)
+        st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
     st.divider()
-
     section_title("Long Articles With Low Reference Density")
-
-    min_characters = st.slider(
-        "Minimum article length (characters)",
-        min_value=500,
-        max_value=10000,
-        value=2000,
-        step=500,
-    )
-
-    low_reference = find_long_articles_with_low_references(
-        df,
-        min_characters=min_characters,
-    )
-
-    st.metric(
-        "Articles Identified",
-        f"{len(low_reference):,}",
-    )
-
+    min_characters=st.slider("Minimum article length (characters)",min_value=500,max_value=10000,value=2000,step=500)
+    low_reference=get_article_results(language,mode="low_reference",min_characters=min_characters,limit=50000)
+    st.metric("Articles Identified (up to 50,000)",f"{len(low_reference):,}")
     if not low_reference.empty:
-
-        show_article_table(
-            low_reference.head(1000),
-            key="low_reference_articles",
-            height=470,
-            show_category=False,
-        )
-
-        show_download(
-            low_reference,
-            "wikipulse_reference_intelligence.csv",
-            "📥 Download reference report",
-        )
-
-    else:
-        st.success("No articles match the selected conditions.")
-
-    st.caption(
-        "A low or zero recorded reference count describes this processed "
-        "dataset snapshot; it does not prove that the current live article "
-        "has no citations."
-    )
+        show_article_table(low_reference.head(1000),key="low_reference_articles",height=470,show_category=False)
+        show_download(low_reference,"wikipulse_reference_intelligence.csv","📥 Download retrieved reference report")
+    else: st.success("No articles match the selected conditions.")
+    st.caption("A low or zero recorded reference count describes this processed dataset snapshot; it does not prove that the current live article has no citations.")
 
 
 # ============================================================
@@ -1712,267 +1265,49 @@ elif page == "Article Search":
 # ============================================================
 
 elif page == "Knowledge Explorer":
-
-    section_title(
-        "🧠 Knowledge Explorer",
-        "Explore Wikipedia articles using completeness, "
-        "references and content information."
-    )
-
-    if df.empty:
-
-        st.warning("No article data is available.")
-
+    section_title("🧠 Knowledge Explorer","Explore Wikipedia articles using completeness, references and content information.")
+    st.caption("This explorer works with article-level metadata; the source dataset does not contain semantic entity relationships.")
+    s,q=st.columns(2)
+    with s: search_query=st.text_input("Search article",placeholder="Enter article title...",key="knowledge_search")
+    with q: selected_quality=st.selectbox("Quality Category",["All"]+QUALITY_ORDER,key="knowledge_quality")
+    f1,f2=st.columns(2)
+    with f1: min_references=st.number_input("Minimum references",min_value=0,value=0,step=1,key="knowledge_min_references")
+    with f2: sort_by=st.selectbox("Sort articles by",["Highest Completeness","Lowest Completeness","Most References","Longest Articles"],key="knowledge_sort")
+    mode={"Highest Completeness":"top","Lowest Completeness":"bottom","Most References":"references","Longest Articles":"characters"}[sort_by]
+    if mode in ("top","bottom"):
+        results=get_article_results(language,mode=mode,limit=50000)
     else:
-
-        # ----------------------------------------------------
-        # DATA PREPARATION
-        # ----------------------------------------------------
-
-        required_columns = [
-            "article",
-            "completeness_score",
-            "references",
-            "characters",
-            "reference_status",
-        ]
-
-        missing_columns = [
-            column for column in required_columns
-            if column not in df.columns
-        ]
-
-        if missing_columns:
-
-            st.error(
-                "Missing dataset columns: "
-                + ", ".join(missing_columns)
-            )
-
-        else:
-
-            explorer_df = df.copy()
-
-            for column in [
-                "completeness_score",
-                "references",
-                "characters",
-            ]:
-
-                explorer_df[column] = pd.to_numeric(
-                    explorer_df[column],
-                    errors="coerce",
-                )
-
-            explorer_df["quality_category"] = (
-                explorer_df["completeness_score"]
-                .apply(quality_category)
-            )
-
-            # ------------------------------------------------
-            # SUMMARY METRICS
-            # ------------------------------------------------
-
-            st.subheader("Knowledge Overview")
-
-            c1, c2, c3, c4 = st.columns(4)
-
-            c1.metric(
-                "Total Articles",
-                f"{len(explorer_df):,}",
-            )
-
-            c2.metric(
-                "Average Completeness",
-                f"{explorer_df['completeness_score'].mean():.2f}",
-            )
-
-            c3.metric(
-                "Total Recorded References",
-                f"{int(explorer_df['references'].fillna(0).sum()):,}",
-            )
-
-            c4.metric(
-                "Average Characters",
-                f"{explorer_df['characters'].mean():,.0f}",
-            )
-
-            st.divider()
-
-            # ------------------------------------------------
-            # SEARCH AND FILTERS
-            # ------------------------------------------------
-
-            st.subheader("Explore Articles")
-
-            search_col, quality_col = st.columns(2)
-
-            with search_col:
-
-                search_query = st.text_input(
-                    "Search article",
-                    placeholder="Enter article title...",
-                    key="knowledge_search",
-                )
-
-            with quality_col:
-
-                selected_quality = st.selectbox(
-                    "Quality Category",
-                    ["All"] + QUALITY_ORDER,
-                    key="knowledge_quality",
-                )
-
-            filter_col1, filter_col2 = st.columns(2)
-
-            with filter_col1:
-
-                min_references = st.number_input(
-                    "Minimum references",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key="knowledge_min_references",
-                )
-
-            with filter_col2:
-
-                sort_by = st.selectbox(
-                    "Sort articles by",
-                    [
-                        "Highest Completeness",
-                        "Lowest Completeness",
-                        "Most References",
-                        "Longest Articles",
-                    ],
-                    key="knowledge_sort",
-                )
-
-            # ------------------------------------------------
-            # APPLY FILTERS
-            # ------------------------------------------------
-
-            filtered = explorer_df.copy()
-
-            if search_query.strip():
-
-                filtered = article_search_filter(
-                    filtered,
-                    search_query.strip(),
-                )
-
-            if selected_quality != "All":
-
-                filtered = filtered[
-                    filtered["quality_category"]
-                    == selected_quality
-                ]
-
-            filtered = filtered[
-                filtered["references"].fillna(0)
-                >= min_references
-            ]
-
-            sort_columns = {
-                "Highest Completeness": (
-                    "completeness_score",
-                    False,
-                ),
-                "Lowest Completeness": (
-                    "completeness_score",
-                    True,
-                ),
-                "Most References": (
-                    "references",
-                    False,
-                ),
-                "Longest Articles": (
-                    "characters",
-                    False,
-                ),
-            }
-
-            sort_column, ascending = sort_columns[sort_by]
-
-            filtered = filtered.sort_values(
-                sort_column,
-                ascending=ascending,
-                na_position="last",
-            )
-
-            st.divider()
-
-            # ------------------------------------------------
-            # RESULTS
-            # ------------------------------------------------
-
-            st.subheader("Article Results")
-
-            st.metric(
-                "Matching Articles",
-                f"{len(filtered):,}",
-            )
-
-            st.caption(
-                "Showing up to 1,000 matching records for display."
-            )
-
-            if filtered.empty:
-
-                st.info(
-                    "No articles match the selected filters."
-                )
-
-            else:
-
-                display_data = filtered.head(1000)
-
-                show_article_table(
-                    display_data,
-                    key="knowledge_explorer_table",
-                    height=500,
-                )
-
-                # --------------------------------------------
-                # DOWNLOAD
-                # --------------------------------------------
-
-                show_download(
-                    filtered.head(50000),
-                    "wikipulse_knowledge_explorer.csv",
-                    "📥 Download Results (up to 50,000 records)",
-                )
-
-                st.caption(
-                    "CSV export is limited to 50,000 records "
-                    "to help prevent memory issues."
-                )
-
-            st.divider()
-
-            # ------------------------------------------------
-            # TOP ARTICLES
-            # ------------------------------------------------
-
-            st.subheader("Top 10 Articles by Completeness")
-
-            top_articles = explorer_df.nlargest(
-                10,
-                "completeness_score",
-            ).copy()
-
-            show_article_table(
-                top_articles,
-                key="knowledge_top_articles",
-                height=400,
-            )
-
-            st.caption(
-                "This explorer uses article-level metadata. "
-                "It does not represent entity relationships "
-                "or a semantic knowledge graph."
-            )
-
+        sort_expr='TRY_CAST("references" AS BIGINT)' if mode=="references" else "TRY_CAST(characters AS BIGINT)"
+        results=query_language(language,f"""
+            SELECT article,url,TRY_CAST(completeness_score AS DOUBLE) AS completeness_score,
+            TRY_CAST(characters AS BIGINT) AS characters,TRY_CAST("references" AS BIGINT) AS "references",
+            TRY_CAST(reference_density AS DOUBLE) AS reference_density,reference_status
+            FROM __PARQUET__ WHERE TRY_CAST("references" AS BIGINT)>={int(min_references)}
+            ORDER BY {sort_expr} DESC NULLS LAST LIMIT 50000
+        """)
+    if not results.empty:
+        if search_query.strip(): results=article_search_filter(results,search_query.strip())
+        if selected_quality!="All":
+            results["quality_category"]=results["completeness_score"].apply(quality_category)
+            results=results[results["quality_category"]==selected_quality]
+        results=results[results["references"].fillna(0)>=min_references]
+    st.divider()
+    st.subheader("Article Results")
+    st.metric("Matching Articles (retrieved sample)",f"{len(results):,}")
+    st.caption("DuckDB scans the Parquet dataset and returns at most 50,000 matching rows; a maximum of 1,000 rows are rendered.")
+    if results.empty: st.info("No articles match the selected filters.")
+    else:
+        display_data=results.head(1000).copy()
+        display_data["quality_category"]=display_data["completeness_score"].apply(quality_category)
+        show_article_table(display_data,key="knowledge_explorer_table",height=500)
+        show_download(results,"wikipulse_knowledge_explorer.csv","📥 Download Results (up to 50,000 records)")
+    st.divider()
+    st.subheader("Top 10 Articles by Completeness")
+    top_articles=get_article_results(language,mode="top",limit=10)
+    if not top_articles.empty:
+        top_articles["quality_category"]=top_articles["completeness_score"].apply(quality_category)
+        show_article_table(top_articles,key="knowledge_top_articles",height=400)
+    st.caption("This explorer uses article-level metadata. It does not represent entity relationships or a semantic knowledge graph.")
 
 
 # ============================================================
